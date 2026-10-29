@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.3.0
+
+### Added
+* **Tall layout**, used when each row has room. The card now defaults to one grid row more than it has rows (2 rows: 184px instead of 120px), and the extra height goes to:
+  * taller sparklines (58px instead of 36px for 2 rows), so the honest scaling gets more resolution;
+  * a time axis: faint lines through every row and labels underneath (00:00, 06:00, 12:00, 18:00 at 24 hours; the steps follow `hours`), in Home Assistant's time zone;
+  * open circles on the line where the low and the high happened;
+  * the trend over the last 3 hours under the value, such as "−2,5° in 3 h" (also in the tooltip);
+  * a bigger value, 24px instead of 20px.
+* The card measures its own height, so resizing it in the dashboard switches between tall and compact.
+
+### Changed
+* Default size: `rows` + 1 grid rows (2 rows: 3 grid rows). A card with `grid_options` already set keeps its size; at 2 grid rows for 2 rows it stays compact, exactly as before. Set `rows: 3` under `grid_options` for the tall layout.
+
 ## v0.2.0
 
 ### Changed

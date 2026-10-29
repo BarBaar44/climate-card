@@ -1,4 +1,4 @@
-# Minimal: an inside and an outside row (rows is required).
+# Minimal: an inside and an outside row (rows is required). 3 grid rows: the tall layout.
 type: custom:climate-card
 rows:
   - name: Inside
@@ -7,7 +7,7 @@ rows:
     temperature: sensor.outdoor_temperature
 grid_options:
   columns: 12
-  rows: 2
+  rows: 3
 
 ---
 # Everything, with the option defaults written out.
@@ -31,7 +31,7 @@ hold_action:
   action: none
 grid_options:
   columns: 12
-  rows: 2
+  rows: 2 # one less than the default: the compact layout
 
 ---
 # Three rows, your old colours, the same scale for every row.
@@ -50,4 +50,4 @@ rows:
 scale: shared
 grid_options:
   columns: 12
-  rows: 3
+  rows: 4
