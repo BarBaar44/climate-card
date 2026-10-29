@@ -1,0 +1,11 @@
+{
+  "name": "climate-card",
+  "private": true,
+  "description": "Development only: tests for climate-card.js. The card itself has no dependencies.",
+  "scripts": {
+    "test": "node tests/climate-card.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Climate Card",
+  "filename": "climate-card.js",
+  "render_readme": true,
+  "homeassistant": "2024.11.0"
+}
