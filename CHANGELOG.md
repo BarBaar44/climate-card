@@ -16,7 +16,7 @@
 First release. Replaces two mini-graph-cards (inside and outside temperature) with one compact card in the style of the other cards.
 
 ### Added
-* **Rows:** 1 to 3 places, each with name, humidity, a sparkline of the temperature and the value now with the low and high. Defaults are the living room and outdoor sensors (no longer from v0.2.0: `rows` is required).
+* **Rows:** 1 to 3 places, each with name, humidity, a sparkline of the temperature and the value now with the low and high. Defaults are the living room and outdoor sensors.
 * **Scaling:** each row scales to its own data but never to less than `min_span` degrees (4), so a small indoor wobble stays small. `scale: shared` gives every row the same degrees per pixel. `min_span: 0` lets every row fill its height.
 * **History** from the recorder (`history/history_during_period`, minimal response), fetched once and again after more than 10 minutes away; new states appended live; the window slides every minute. A quiet sensor keeps its value until its next state.
 * Exact low and high with their times in the tooltip.
