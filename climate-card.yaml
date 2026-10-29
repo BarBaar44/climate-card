@@ -1,0 +1,48 @@
+# Minimal: the default rows (inside and outside).
+type: custom:climate-card
+grid_options:
+  columns: 12
+  rows: 2
+
+---
+# Everything, with the defaults written out.
+type: custom:climate-card
+rows:
+  - name: Inside
+    temperature: sensor.temperature_living_room_temperature
+    humidity: sensor.temperature_living_room_humidity
+    color: var(--green-color)
+  - name: Outside
+    temperature: sensor.outdoor_temperature
+    humidity: sensor.outdoor_humidity
+    color: var(--orange-color)
+hours: 24
+min_span: 4
+scale: own
+decimals: 1
+tap_action:
+  action: more-info
+hold_action:
+  action: none
+grid_options:
+  columns: 12
+  rows: 2
+
+---
+# Three rows, your old colours, the same scale for every row.
+type: custom:climate-card
+rows:
+  - name: Inside
+    temperature: sensor.temperature_living_room_temperature
+    humidity: sensor.temperature_living_room_humidity
+    color: "#008000"
+  - name: Outside
+    temperature: sensor.outdoor_temperature
+    humidity: sensor.outdoor_humidity
+    color: "#FFA500"
+  - name: Bedroom
+    temperature: sensor.bedroom_temperature
+scale: shared
+grid_options:
+  columns: 12
+  rows: 3
