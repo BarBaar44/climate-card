@@ -9,6 +9,11 @@
  * still fills the row. `scale: shared` gives every row the same degrees per
  * pixel instead.
  *
+ * Tall layout: when each row has room (the default size is one grid row
+ * more than there are rows), the sparklines grow and get a time axis, the
+ * low and high are marked on the line, and a 3 hour trend shows under the
+ * value. The card measures its own height, so resizing it is enough.
+ *
  * History comes from the recorder once (and again after the card has been
  * away for a while); after that new states are appended live.
  *
@@ -21,7 +26,7 @@
 // Everything sits in one block so the top-level names cannot clash with the
 // sister cards when the files are loaded as classic scripts.
 {
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 const CLIMATE_HOLD_MS = 500;
 const CLIMATE_MOVE_PX = 10;
@@ -29,6 +34,9 @@ const CLIMATE_TICK_MS = 60000; // the window slides without a state change
 const CLIMATE_REFETCH_MS = 600000; // away longer than this: fetch the history again
 const CLIMATE_BUCKETS = 144; // points drawn per sparkline
 const CLIMATE_MAX_ROWS = 3;
+const CLIMATE_TREND_MS = 3 * 3600000; // the trend under the value compares with this long ago
+const CLIMATE_AXIS_PX = 18; // the time axis under the rows (tall layout)
+const CLIMATE_TALL_ROW_PX = 66; // a row this high or more gets the tall layout
 
 /* Default line colour per row position. */
 const CLIMATE_ROW_COLORS = [
@@ -85,7 +93,8 @@ const CLIMATE_STYLE = `
   }
   /* One grid for all rows (subgrid), so every sparkline starts and ends at the same x. */
   .rows {
-    height: 100%; display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; grid-auto-rows: minmax(0, 1fr); column-gap: 12px;
+    height: 100%; display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; column-gap: 12px;
+    grid-template-rows: repeat(var(--n, 2), minmax(48px, 1fr)) auto; /* the last track holds the time axis */
   }
   .row {
     grid-column: 1 / -1; min-height: 0; position: relative;
@@ -95,6 +104,7 @@ const CLIMATE_STYLE = `
     user-select: none; -webkit-user-select: none; touch-action: manipulation;
   }
   .row + .row { border-top: 1px solid var(--cc-divider); }
+  .axis { display: none; }
   .row.pressed { opacity: .7; }
   .row:focus-visible { box-shadow: inset 0 0 0 2px var(--primary-color); }
 
@@ -109,12 +119,31 @@ const CLIMATE_STYLE = `
   .area { fill: currentColor; fill-opacity: .14; stroke: none; }
   .dot { position: absolute; left: 100%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: currentColor; display: none; }
   .has-data .dot { display: block; }
+  .ticks { display: none; }
+  .ticks line { stroke: var(--cc-divider); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .mk {
+    position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; box-sizing: border-box; border-radius: 50%;
+    border: 1.5px solid currentColor; background: var(--card-background-color, var(--ha-card-background, #fff)); display: none;
+  }
 
   .val { text-align: right; min-width: 56px; }
   .now { font-size: 20px; font-weight: 500; line-height: 24px; white-space: nowrap; }
   .mm { font-size: 11px; line-height: 14px; color: var(--secondary-text-color); white-space: nowrap; }
   .mm:empty { display: none; }
+  .trend { display: none; font-size: 11px; line-height: 14px; color: var(--secondary-text-color); white-space: nowrap; }
   .unavailable .now { color: var(--disabled-color, #9e9e9e); }
+
+  /* Tall: taller sparklines with a time axis, low and high marked, the trend, a bigger value. */
+  .tall .spark { height: auto; max-height: none; align-self: stretch; margin: 12px 0; }
+  .tall .ticks { display: inline; }
+  .tall .has-data .mk { display: block; }
+  .tall .trend:not(:empty) { display: block; }
+  .tall .now { font-size: 24px; line-height: 28px; }
+  .tall .axis {
+    display: block; grid-column: 2; position: relative; height: ${CLIMATE_AXIS_PX}px;
+    font-size: 10px; line-height: 12px; color: var(--secondary-text-color);
+  }
+  .axis span { position: absolute; top: 1px; transform: translateX(-50%); white-space: nowrap; }
 
   /* Narrow cards (6 columns, or a phone): short words, a smaller label column. */
   .long { display: none; }
@@ -126,10 +155,11 @@ const CLIMATE_STYLE = `
     .rows { grid-template-columns: 64px minmax(0, 1fr) auto; column-gap: 8px; }
     .row { padding: 0 10px; }
     .val { min-width: 48px; }
+    .axis .minor { display: none; } /* a 6 column card: labels 12 h apart */
   }
   @container (max-width: 179px) {
     .rows { grid-template-columns: minmax(0, 1fr) auto; }
-    .spark { display: none; }
+    .spark, .tall .axis { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -147,6 +177,8 @@ class ClimateCard extends HTMLElement {
     this._tick = null;
     this._fetchNo = 0;
     this._fetchedAt = 0;
+    this._tall = false;
+    this._ro = null;
   }
 
   static getConfigElement() {
@@ -256,6 +288,7 @@ class ClimateCard extends HTMLElement {
   connectedCallback() {
     clearInterval(this._tick);
     this._tick = setInterval(() => this._update(), CLIMATE_TICK_MS);
+    this._observe();
     // A wall display or a background tab: catch up on what happened while away.
     if (this._hass && this._config && this._fetchedAt && Date.now() - this._fetchedAt > CLIMATE_REFETCH_MS) this._fetch();
   }
@@ -263,15 +296,33 @@ class ClimateCard extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this._tick);
     this._tick = null;
+    if (this._ro) this._ro.disconnect();
+  }
+
+  /* The card's own height decides the layout, so resizing it in the dashboard is enough. */
+  _observe() {
+    if (typeof ResizeObserver !== "function" || !this._card) return;
+    if (!this._ro) this._ro = new ResizeObserver((entries) => this._measure(entries[entries.length - 1].contentRect.height));
+    this._ro.disconnect();
+    this._ro.observe(this._card);
+  }
+
+  /* Tall when every row gets CLIMATE_TALL_ROW_PX next to the time axis: 2 rows at 184px, not at 120px. */
+  _measure(height) {
+    const n = this._config ? this._config.rows.length : 2;
+    const tall = height > 0 && (height - CLIMATE_AXIS_PX) / n >= CLIMATE_TALL_ROW_PX;
+    if (tall === this._tall) return;
+    this._tall = tall;
+    if (this._card) this._card.classList.toggle("tall", tall);
   }
 
   getCardSize() {
-    return this._config ? Math.ceil(this._config.rows.length * 1.2) : 3;
+    return this._config ? Math.ceil(this._config.rows.length * 1.2) + 1 : 4;
   }
 
   getGridOptions() {
     const n = this._config ? this._config.rows.length : 2;
-    return { columns: 12, rows: n, min_columns: 6, min_rows: n };
+    return { columns: 12, rows: n + 1, min_columns: 6, min_rows: n }; // n + 1: the tall layout
   }
 
   /* ---- history -------------------------------------------------------------- */
@@ -396,15 +447,19 @@ class ClimateCard extends HTMLElement {
     const rows = this._config.rows.map((_, i) => `
       <div class="row" role="button" tabindex="0" data-i="${i}">
         <div class="lbl"><div class="name"></div><div class="sub"></div></div>
-        <div class="spark"><svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><path class="area"/><path class="line"/></svg><span class="dot"></span></div>
-        <div class="val"><div class="now"></div><div class="mm"></div></div>
+        <div class="spark"><svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><g class="ticks"></g><path class="area"/><path class="line"/></svg><span class="mk lo"></span><span class="mk hi"></span><span class="dot"></span></div>
+        <div class="val"><div class="now"></div><div class="trend"></div><div class="mm"></div></div>
       </div>`).join("");
-    this.shadowRoot.innerHTML = `<style>${CLIMATE_STYLE}</style><ha-card><div class="rows">${rows}</div></ha-card>`;
+    this.shadowRoot.innerHTML = `<style>${CLIMATE_STYLE}</style><ha-card${this._tall ? ' class="tall"' : ""}><div class="rows" style="--n: ${this._config.rows.length}">${rows}<div class="axis" aria-hidden="true"></div></div></ha-card>`;
+    this._card = this.shadowRoot.querySelector("ha-card");
+    this._axis = this.shadowRoot.querySelector(".axis");
+    this._axis._shown = null;
+    if (this.isConnected) this._observe(); // observe() reports the size at once, so the layout follows new rows too
     this._rows = [...this.shadowRoot.querySelectorAll(".row")].map((el, i) => {
       const $ = (s) => el.querySelector(s);
       el.style.setProperty("--c", this._config.rows[i].color);
       this._bindPress(el, i);
-      return { el, name: $(".name"), sub: $(".sub"), area: $(".area"), line: $(".line"), dot: $(".dot"), now: $(".now"), mm: $(".mm") };
+      return { el, name: $(".name"), sub: $(".sub"), area: $(".area"), line: $(".line"), dot: $(".dot"), now: $(".now"), mm: $(".mm"), trend: $(".trend"), ticks: $(".ticks"), lo: $(".mk.lo"), hi: $(".mk.hi") };
     });
   }
 
@@ -499,6 +554,65 @@ class ClimateCard extends HTMLElement {
     }
   }
 
+  /* Hour, minute and short weekday in HA's time zone. */
+  _hm(ms) {
+    const tz = this._hass && this._hass.config && this._hass.config.time_zone;
+    if (!this._hmFmt || this._hmTz !== tz) {
+      const opts = { hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short" };
+      try {
+        this._hmFmt = new Intl.DateTimeFormat("en-GB", tz ? { ...opts, timeZone: tz } : opts);
+      } catch (_) {
+        this._hmFmt = new Intl.DateTimeFormat("en-GB", opts);
+      }
+      this._hmTz = tz;
+    }
+    const o = {};
+    this._hmFmt.formatToParts(new Date(ms)).forEach((x) => { o[x.type] = x.value; });
+    return { h: +o.hour % 24, m: +o.minute };
+  }
+
+  /*
+   * Time axis ticks in HA's time zone: [fraction of the window, label, minor].
+   * Minor ticks (06:00 and 18:00 at 6 h steps) lose their label on narrow cards.
+   * Every hour up to 6 h, every 3 h up to 12 h, every 6 h up to 36 h, else midnights (weekday).
+   */
+  _ticks(start, span) {
+    const hours = span / 3600000;
+    const every = hours <= 6 ? 1 : hours <= 12 ? 3 : hours <= 36 ? 6 : 24;
+    const out = [];
+    const q = 900000; // whole quarters, so half-hour time zones work too
+    for (let t = Math.ceil(start / q) * q; t < start + span; t += q) {
+      const { h, m } = this._hm(t);
+      if (m !== 0 || h % every !== 0) continue;
+      const label = every === 24 ? this._weekday(t) : this._clock(t);
+      const minor = every === 24 ? out.length % 2 === 1 : (h / every) % 2 === 1;
+      out.push([(t - start) / span, label, minor]);
+    }
+    return out;
+  }
+
+  _weekday(ms) {
+    const [, lang] = this._locale();
+    const tz = this._hass && this._hass.config && this._hass.config.time_zone;
+    try {
+      return new Intl.DateTimeFormat(lang, tz ? { weekday: "short", timeZone: tz } : { weekday: "short" }).format(new Date(ms));
+    } catch (_) {
+      return new Intl.DateTimeFormat("en-GB", { weekday: "short" }).format(new Date(ms));
+    }
+  }
+
+  /* The value CLIMATE_TREND_MS ago: the last state at or before then; null when the history does not reach back. */
+  _past(id, now) {
+    const pts = this._pts[id] || [];
+    const at = now - CLIMATE_TREND_MS;
+    let v = null;
+    for (const p of pts) {
+      if (p[0] > at) break;
+      v = p[1];
+    }
+    return v;
+  }
+
   _s(id) {
     return id && this._hass ? this._hass.states[id] : undefined;
   }
@@ -532,6 +646,15 @@ class ClimateCard extends HTMLElement {
     const series = cfg.rows.map((r) => this._series(r.temperature, now));
     const ranges = this._ranges(series);
     const d = cfg.decimals;
+    const span = cfg.hours * 3600000;
+    const ticks = this._ticks(now - span, span);
+    const tickLines = ticks.map(([x]) => `<line x1="${(x * 1000).toFixed(1)}" x2="${(x * 1000).toFixed(1)}" y1="0" y2="100"/>`).join("");
+    const axis = ticks.filter(([x]) => x > 0.06 && x < 0.94)
+      .map(([x, l, minor]) => `<span${minor ? ' class="minor"' : ""} style="left:${(x * 100).toFixed(2)}%">${l}</span>`).join("");
+    if (this._axis._shown !== axis) {
+      this._axis._shown = axis;
+      this._axis.innerHTML = axis;
+    }
 
     cfg.rows.forEach((r, i) => {
       const e = this._rows[i];
@@ -548,6 +671,16 @@ class ClimateCard extends HTMLElement {
       else this._text(e.sub, "");
 
       this._text(e.now, unavailable ? "" : `${this._num(s.cur, d)}°`);
+      // Trend: now against CLIMATE_TREND_MS ago, at the card's decimals; ± when it rounds to nothing.
+      const past = unavailable ? null : this._past(r.temperature, now);
+      let trend = "";
+      if (past !== null) {
+        const dv = Number((s.cur - past).toFixed(d));
+        const sign = dv > 0 ? "+" : dv < 0 ? "\u2212" : "\u00b1";
+        trend = `${sign}${this._num(Math.abs(dv), d)}\u00b0 in ${CLIMATE_TREND_MS / 3600000} h`;
+      }
+      this._text(e.trend, trend);
+
       this._text(e.mm, s.low && s.high ? `↓${this._num(s.low[1], d)} ↑${this._num(s.high[1], d)}` : "");
 
       // Sparkline: x by time across the window, y by the row's range, 8..92 of 100.
@@ -560,9 +693,19 @@ class ClimateCard extends HTMLElement {
         e.line.setAttribute("d", p);
         e.area.setAttribute("d", `${p}L${X(s.line[s.line.length - 1][0]).toFixed(1)} 100L${X(s.line[0][0]).toFixed(1)} 100Z`);
         e.dot.style.top = `${Y(s.line[s.line.length - 1][1]).toFixed(2)}%`;
+        // Low and high where they happened; the drawn line is averaged, so the exact value may sit just outside it.
+        const clamp = (v) => Math.max(0, Math.min(100, v));
+        for (const [el, pt] of [[e.lo, s.low], [e.hi, s.high]]) {
+          el.style.left = `${(X(pt[0]) / 10).toFixed(2)}%`;
+          el.style.top = `${clamp(Y(pt[1])).toFixed(2)}%`;
+        }
       } else {
         e.line.removeAttribute("d");
         e.area.removeAttribute("d");
+      }
+      if (e.ticks._shown !== tickLines) {
+        e.ticks._shown = tickLines;
+        e.ticks.innerHTML = tickLines;
       }
 
       // Tooltip and label: now, low and high with their times, humidity.
@@ -571,6 +714,7 @@ class ClimateCard extends HTMLElement {
       if (s.low && s.high) {
         parts.push(`low ${this._num(s.low[1], d)} at ${this._clock(s.low[0])}, high ${this._num(s.high[1], d)} at ${this._clock(s.high[0])} (last ${cfg.hours} h)`);
       }
+      if (trend) parts.push(`${trend.replace("\u2212", "-")}`);
       if (hum !== null) parts.push(`${Math.round(hum)}% humidity`);
       const title = parts.join(", ");
       e.el.title = title;

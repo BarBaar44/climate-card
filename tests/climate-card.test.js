@@ -102,7 +102,7 @@ test("two rows: names, humidity, values, low and high, default colours", async (
   assert(a.hasData && b.hasData);
   assert.strictEqual(a.color, "var(--green-color, #4caf50)");
   assert.strictEqual(b.color, "var(--orange-color, #ff9800)");
-  same(c.getGridOptions(), { columns: 12, rows: 2, min_columns: 6, min_rows: 2 });
+  same(c.getGridOptions(), { columns: 12, rows: 3, min_columns: 6, min_rows: 2 }); // one more: the tall layout
 });
 
 test("history request: one call, the window, both temperature sensors, minimal", async () => {
@@ -247,13 +247,13 @@ test("decimals, hours, custom rows, a row without humidity, name from the sensor
   assert.strictEqual(row(c, 0).now, "21°");
   assert.strictEqual(row(c, 0).color, "teal");
   assert.strictEqual(row(c, 2).color, "var(--blue-color, #2196f3)");
-  same(c.getGridOptions(), { columns: 12, rows: 3, min_columns: 6, min_rows: 3 });
+  same(c.getGridOptions(), { columns: 12, rows: 4, min_columns: 6, min_rows: 3 });
 });
 
 test("tooltip has low and high with times", async () => {
   const c = await render();
   const t = row(c, 0).title;
-  assert(/^Inside: 21\.2 °C, low 19\.5 at \d\d:\d\d, high 21\.2 at \d\d:\d\d \(last 24 h\), 55% humidity$/.test(t), t);
+  assert(/^Inside: 21\.2 °C, low 19\.5 at \d\d:\d\d, high 21\.2 at \d\d:\d\d \(last 24 h\), \+0\.2° in 3 h, 55% humidity$/.test(t), t);
 });
 
 test("tap opens more-info on the row's sensor; hold does nothing by default", async () => {
@@ -432,6 +432,93 @@ test("stub config: an inside and an outside sensor, humidity of the same device"
   new Card().setConfig(stub);
   same(Card.getStubConfig({ states: {} }), { rows: [{ temperature: "sensor.temperature" }] });
   same(Card.getStubConfig(undefined), { rows: [{ temperature: "sensor.temperature" }] });
+});
+
+test("tall layout: switched by the card's own height", async () => {
+  const c = await render();
+  const card = c.shadowRoot.querySelector("ha-card");
+  assert(!card.classList.contains("tall"), "starts compact");
+  c._measure(120); // 2 grid rows
+  assert(!card.classList.contains("tall"));
+  c._measure(184); // 3 grid rows
+  assert(card.classList.contains("tall"));
+  c._measure(160); // rows: auto at a third more
+  assert(card.classList.contains("tall"));
+  c._measure(0); // not laid out yet
+  assert(!card.classList.contains("tall"));
+  // 3 rows: 184 px is compact, 248 px tall. 1 row: 120 px is tall.
+  const three = await render({ rows: [...ROWS, { temperature: OUT_T }] });
+  three._measure(184);
+  assert(!three.shadowRoot.querySelector("ha-card").classList.contains("tall"));
+  three._measure(248);
+  assert(three.shadowRoot.querySelector("ha-card").classList.contains("tall"));
+  const one = await render({ rows: [ROWS[1]] });
+  one._measure(120);
+  assert(one.shadowRoot.querySelector("ha-card").classList.contains("tall"));
+  same(one.getGridOptions(), { columns: 12, rows: 2, min_columns: 6, min_rows: 1 });
+  // A new config keeps the measured layout until the next measurement; then it follows the new rows.
+  c._measure(184);
+  c.setConfig({ rows: ROWS, decimals: 0 });
+  assert(c.shadowRoot.querySelector("ha-card").classList.contains("tall"), "kept after rebuild");
+  c.setConfig({ rows: [...ROWS, { temperature: OUT_T }] });
+  c._measure(184); // same height, three rows now
+  assert(!c.shadowRoot.querySelector("ha-card").classList.contains("tall"), "follows the new rows");
+});
+
+test("trend: now against 3 hours ago, signed, at the card's decimals", async () => {
+  // Inside: 19.5 until 12 h ago, then 21.0; now 21.2. Outside: a sine.
+  const c = await render();
+  assert.strictEqual(c._rows[0].trend.textContent, "+0.2\u00b0 in 3 h");
+  const s3 = c._past(OUT_T, NOW);
+  const want = 7.2 - s3;
+  const txt = c._rows[1].trend.textContent;
+  assert.strictEqual(txt, `${want < 0 ? "\u2212" : "+"}${Math.abs(want).toFixed(1)}\u00b0 in 3 h`);
+  // Rounds to nothing: ±. No history that far back: no trend.
+  const flat = { [IN_T]: hist(() => 21.23), [OUT_T]: [{ s: "7", lu: (NOW - 2 * H) / 1000 }] };
+  const d = await render({}, states({ in: 21.2, out: 7.2 }), flat);
+  assert.strictEqual(d._rows[0].trend.textContent, "\u00b10.0\u00b0 in 3 h");
+  assert.strictEqual(d._rows[1].trend.textContent, "");
+  // Unavailable: no trend.
+  const u = await render({}, { ...states(), [IN_T]: st("unavailable") });
+  assert.strictEqual(u._rows[0].trend.textContent, "");
+});
+
+test("time axis: 00, 06, 12, 18 in HA's time zone; steps follow the hours shown", async () => {
+  const c = await render(); // 24 h ending 12:00 UTC
+  const labels = [...c.shadowRoot.querySelectorAll(".axis span")].map((x) => x.textContent);
+  same(labels, ["18:00", "00:00", "06:00"]); // 12:00 sits on both edges and is left out
+  assert.strictEqual(c._rows[0].ticks.querySelectorAll("line").length, 4);
+  // Amsterdam is UTC+1 on 29 Oct 2026: the ticks move with it.
+  const a = new Card();
+  w.document.body.appendChild(a);
+  cards.push(a);
+  a.setConfig({ rows: ROWS });
+  a.hass = { ...hass(states()), config: { time_zone: "Europe/Amsterdam" } };
+  await flush();
+  const f = a._ticks(NOW - 24 * H, 24 * H).map(([x, l]) => [Math.round(x * 24), l]);
+  same(f, [[5, "18:00"], [11, "00:00"], [17, "06:00"], [23, "12:00"]]);
+  same(a._ticks(NOW - 24 * H, 24 * H).map((x) => x[2]), [true, false, true, false]); // 06 and 18 are minor
+  assert.strictEqual(c.shadowRoot.querySelectorAll(".axis span.minor").length, 2);
+  // 6 h: every hour; 7 days: midnights with the weekday.
+  const six = await render({ hours: 6 });
+  assert.strictEqual(six._ticks(NOW - 6 * H, 6 * H).length, 6);
+  const week = await render({ hours: 168 });
+  const wk = week._ticks(NOW - 168 * H, 168 * H);
+  assert.strictEqual(wk.length, 7);
+  assert(wk.every(([, l]) => /^[A-Z][a-z]{2}$/.test(l)), JSON.stringify(wk));
+});
+
+test("low and high markers sit where they happened", async () => {
+  const c = await render({ min_span: 0 });
+  const e = c._rows[1];
+  const s = c._series(OUT_T, NOW);
+  assert(Math.abs(parseFloat(e.lo.style.left) - ((s.low[0] - s.start) / s.span) * 100) < 0.01);
+  assert(Math.abs(parseFloat(e.hi.style.left) - ((s.high[0] - s.start) / s.span) * 100) < 0.01);
+  assert(parseFloat(e.hi.style.top) < parseFloat(e.lo.style.top), "high above low");
+  for (const el of [e.lo, e.hi]) {
+    const top = parseFloat(el.style.top);
+    assert(top >= 0 && top <= 100, String(top));
+  }
 });
 
 (async () => {
