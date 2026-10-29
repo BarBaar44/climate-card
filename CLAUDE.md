@@ -6,7 +6,7 @@ HACS dashboard card (Lovelace) with one row per place (inside, outside, optional
 
 | File | Purpose |
 |---|---|
-| `climate-card.js` | The whole card: plain custom element, no build step, no dependencies. `CLIMATE_DEFAULTS` holds the owner's sensors and the graph defaults, `CLIMATE_ROW_COLORS` the default colour per row position. |
+| `climate-card.js` | The whole card: plain custom element, no build step, no dependencies. `CLIMATE_DEFAULTS` holds the graph defaults (no rows: `rows` is required), `climateStubRows` picks the card picker's rows from the user's sensors, `CLIMATE_ROW_COLORS` the default colour per row position. |
 | `tests/climate-card.test.js` | jsdom tests with a fixed clock and a fake `callWS`: values, low and high, the history request, min_span and shared scaling (measured on the drawn path), flat lines, carried values, the state before the window, live appends, states during the fetch, a failing fetch, unavailable, number format, custom rows, tooltip, actions, re-render rules, refetching, config errors, editor round trips. `npm test`. |
 | `hacs.json` | HACS manifest (HA 2024.11+). |
 | `README.md` | User docs, also the HACS info page. Keep the option, row and state tables in sync with the code. |
@@ -29,7 +29,7 @@ HACS dashboard card (Lovelace) with one row per place (inside, outside, optional
 * Number format from `hass.locale` (`number_format`), times in HA's time zone.
 * The rows share one grid (`.rows` with `subgrid` rows), so every sparkline has the same x range. Container queries sit on `ha-card` and change `.rows`: below 300px the short humidity text and a 64px label column, below 180px no sparkline.
 * Height: n rows = n grid rows (56px each plus 8px gaps): 56, 120, 184px. Measure in a real browser (Playwright, `ha-card` stub without an inline `display`, 12-column 56px-row grid, 360 and 520px) after any layout change.
-* Visual editor (`ClimateCardEditor`, on `ha-form`): three row slots; a slot without a temperature sensor is skipped and the rows after it move up; no rows left means the defaults. Row colour written only when it differs from the default for its position. Only non-defaults written; unknown keys kept.
+* Visual editor (`ClimateCardEditor`, on `ha-form`): three row slots; a slot without a temperature sensor is skipped and the rows after it move up; no rows left means no `rows` in the YAML (the card then shows its "rows is required" error). Rows always written; row colour only when it differs from the default for its position; other options only when not default; unknown keys kept.
 * The card never hardcodes service calls: tap and hold go through `hass-action` with the row's temperature sensor.
 * Re-render only when one of the card's own entities changes, plus the 1 minute tick. DOM built once per config, updated in place.
 * The whole file sits in one block scope so its top-level names cannot clash with sister cards loaded as classic scripts; `const VERSION` stays on its own line for the Release workflow.

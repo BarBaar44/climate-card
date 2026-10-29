@@ -22,6 +22,10 @@ const IN_T = "sensor.temperature_living_room_temperature";
 const IN_H = "sensor.temperature_living_room_humidity";
 const OUT_T = "sensor.outdoor_temperature";
 const OUT_H = "sensor.outdoor_humidity";
+const ROWS = [
+  { name: "Inside", temperature: IN_T, humidity: IN_H },
+  { name: "Outside", temperature: OUT_T, humidity: OUT_H },
+];
 const st = (state, t = NOW - 60000, attributes = {}) => ({ state: String(state), attributes, last_changed: iso(t), last_updated: iso(t) });
 const states = (o = {}) => ({
   [IN_T]: st(o.in ?? 21.2, NOW - 60000, { unit_of_measurement: "°C", friendly_name: "Living room" }),
@@ -58,7 +62,7 @@ async function render(config = {}, s = states(), history) {
   const c = new Card();
   w.document.body.appendChild(c);
   cards.push(c);
-  c.setConfig(config);
+  c.setConfig({ rows: ROWS, ...config });
   c.hass = hass(s, history);
   await flush();
   return c;
@@ -82,7 +86,7 @@ const same = (a, b, m) => assert.strictEqual(JSON.stringify(a), JSON.stringify(b
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
-test("defaults: two rows, names, humidity, values, low and high", async () => {
+test("two rows: names, humidity, values, low and high, default colours", async () => {
   const c = await render();
   assert.strictEqual(c._rows.length, 2);
   const a = row(c, 0);
@@ -188,7 +192,7 @@ test("live states that arrive while the history loads are kept", async () => {
   const c = new Card();
   w.document.body.appendChild(c);
   cards.push(c);
-  c.setConfig({});
+  c.setConfig({ rows: ROWS });
   c.hass = slow;
   c.hass = { ...slow, states: { ...slow.states, [IN_T]: st(24, NOW - 500) } };
   release();
@@ -220,7 +224,7 @@ test("number format: comma decimals for Dutch", async () => {
   const c = new Card();
   w.document.body.appendChild(c);
   cards.push(c);
-  c.setConfig({});
+  c.setConfig({ rows: ROWS });
   c.hass = { ...hass(states()), language: "nl", locale: { language: "nl", number_format: "language" } };
   await flush();
   assert.strictEqual(row(c, 0).now, "21,2°");
@@ -291,7 +295,7 @@ test("fetches again after being away, and on a new set of sensors", async () => 
   w.document.body.appendChild(c);
   await flush();
   assert.strictEqual(calls.length, 2);
-  c.setConfig({ hours: 24, decimals: 2 }); // same sensors, same window: no fetch
+  c.setConfig({ rows: ROWS, hours: 24, decimals: 2 }); // same sensors, same window: no fetch
   await flush();
   assert.strictEqual(calls.length, 2);
   c.setConfig({ rows: [{ temperature: OUT_T }] });
@@ -302,29 +306,34 @@ test("fetches again after being away, and on a new set of sensors", async () => 
 
 test("config errors", () => {
   const bad = [
-    [{ row: [] }, /Unknown option 'row'/],
+    [{}, /rows is required/],
+    [{ rows: ROWS, row: [] }, /Unknown option 'row'\. Known: rows, .*, card_mod$/],
     [{ rows: [] }, /1 to 3 rows/],
     [{ rows: [{ temperature: IN_T }, { temperature: IN_T }, { temperature: IN_T }, { temperature: IN_T }] }, /1 to 3 rows/],
     [{ rows: [{ temp: IN_T }] }, /unknown key 'temp'/],
     [{ rows: [{ name: "x" }] }, /not an entity id/],
     [{ rows: [{ temperature: IN_T, humidity: "nope" }] }, /humidity/],
     [{ rows: ["sensor.x"] }, /must be a map/],
-    [{ hours: 0 }, /hours/],
-    [{ hours: 200 }, /hours/],
-    [{ min_span: -1 }, /min_span/],
-    [{ scale: "log" }, /scale/],
-    [{ decimals: 1.5 }, /decimals/],
+    [{ rows: ROWS, hours: 0 }, /hours/],
+    [{ rows: ROWS, hours: 200 }, /hours/],
+    [{ rows: ROWS, min_span: -1 }, /min_span/],
+    [{ rows: ROWS, scale: "log" }, /scale/],
+    [{ rows: ROWS, decimals: 1.5 }, /decimals/],
   ];
   for (const [cfg, re] of bad) assert.throws(() => new Card().setConfig(cfg), re, JSON.stringify(cfg));
   new Card().setConfig({ rows: [{ temperature: IN_T, humidity: null }] }); // null switches humidity off
 });
 
-test("editor: defaults shown, only changes written, round trip", async () => {
+test("editor: rows and defaults shown, only changes written, round trip", async () => {
   const Editor = w.customElements.get("climate-card-editor");
   assert(Editor, "editor registered");
   assert.equal(Card.getConfigElement().tagName.toLowerCase(), "climate-card-editor");
 
-  const minimal = { type: "custom:climate-card", grid_options: { columns: 12, rows: 2 } };
+  // A new card without rows: three empty slots.
+  const empty = Editor.toData({ type: "custom:climate-card" });
+  assert.deepEqual([empty.row1.temperature, empty.row2.temperature, empty.row3.temperature], ["", "", ""]);
+
+  const minimal = { type: "custom:climate-card", rows: ROWS, grid_options: { columns: 12, rows: 2 } };
   const d0 = Editor.toData(minimal);
   assert.deepEqual(d0.row1, { name: "Inside", temperature: IN_T, humidity: IN_H, color: "var(--green-color, #4caf50)" });
   assert.deepEqual(d0.row2, { name: "Outside", temperature: OUT_T, humidity: OUT_H, color: "var(--orange-color, #ff9800)" });
@@ -362,7 +371,7 @@ test("editor: defaults shown, only changes written, round trip", async () => {
   const c3 = Editor.toConfig(d3, c2);
   assert.deepEqual(c3.rows.map((r) => r.name), ["Outside", "Bedroom"]);
 
-  // No row left: back to the defaults. Zero min_span is written.
+  // No row left: no rows written, and the card asks for one. Zero min_span is written.
   const d4 = Editor.toData(c1);
   d4.row1.temperature = "";
   d4.row2.temperature = "";
@@ -370,6 +379,7 @@ test("editor: defaults shown, only changes written, round trip", async () => {
   const c4 = Editor.toConfig(d4, c1);
   assert.equal("rows" in c4, false);
   assert.equal(c4.min_span, 0);
+  assert.throws(() => new Card().setConfig(c4), /rows is required/);
 
   // hours, decimals, actions, empty name
   const full = {
@@ -379,7 +389,7 @@ test("editor: defaults shown, only changes written, round trip", async () => {
   assert.deepEqual(Editor.toConfig(Editor.toData(full), full), full);
 
   // every config the editor writes is accepted by the card
-  for (const c of [c1, c2, c3, c4, full]) new Card().setConfig(c);
+  for (const c of [c1, c2, c3, full]) new Card().setConfig(c);
 
   // with a stub ha-form: renders and passes changes on
   if (!w.customElements.get("ha-form")) w.customElements.define("ha-form", class extends w.HTMLElement {});
@@ -396,6 +406,32 @@ test("editor: defaults shown, only changes written, round trip", async () => {
   form.dispatchEvent(new w.CustomEvent("value-changed", { detail: { value: { ...form.data, hours: 48 } } }));
   assert.deepEqual(got[0], { ...minimal, hours: 48 });
   ed.remove();
+});
+
+test("stub config: an inside and an outside sensor, humidity of the same device", () => {
+  const T = (v, name) => st(v, NOW, { device_class: "temperature", friendly_name: name });
+  const Hm = (v) => st(v, NOW, { device_class: "humidity" });
+  const s = {
+    "sensor.garden_temp": T(7, "Outside"),
+    "sensor.attic_temperature": T(14, "Attic"),
+    "sensor.attic_humidity": Hm(60),
+    "sensor.kitchen_temperature": T(20, "Kitchen"),
+    "sensor.broken_temperature": T("unavailable", "Broken"),
+    "sensor.kitchen_humidity": Hm(50),
+    "sensor.lux": st(300, NOW, { device_class: "illuminance" }),
+  };
+  const entities = {
+    "sensor.attic_temperature": { device_id: "a" }, "sensor.attic_humidity": { device_id: "a" },
+    "sensor.garden_temp": { device_id: "g" }, "sensor.kitchen_humidity": { device_id: "k" },
+  };
+  const stub = Card.getStubConfig({ states: s, entities });
+  same(stub, { rows: [
+    { temperature: "sensor.attic_temperature", humidity: "sensor.attic_humidity" },
+    { temperature: "sensor.garden_temp" },
+  ] });
+  new Card().setConfig(stub);
+  same(Card.getStubConfig({ states: {} }), { rows: [{ temperature: "sensor.temperature" }] });
+  same(Card.getStubConfig(undefined), { rows: [{ temperature: "sensor.temperature" }] });
 });
 
 (async () => {

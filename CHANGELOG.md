@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.0
+
+### Changed
+* **`rows` is now required.** The card no longer falls back to built-in sensors that only exist on one Home Assistant. A config without `rows` shows an error card that says so. **Before updating:** if your config is just `type: custom:climate-card`, add your rows first (see the README).
+* The card picker starts the card with your own sensors: an inside and an outside temperature sensor (found by name, else the first two), each with the humidity sensor of the same device.
+* The visual editor always writes the rows. Removing every row leaves no rows in the YAML, and the card asks for one.
+* The "Unknown option" error lists every known option.
+
+### Docs
+* README: the "quiet sensor" note says the line is drawn from 10 minute averages, so a jump shows as a short slope; a "Made with AI" note.
+
 ## v0.1.0
 
 First release. Replaces two mini-graph-cards (inside and outside temperature) with one compact card in the style of the other cards.
