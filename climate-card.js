@@ -21,7 +21,7 @@
 // Everything sits in one block so the top-level names cannot clash with the
 // sister cards when the files are loaded as classic scripts.
 {
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const CLIMATE_HOLD_MS = 500;
 const CLIMATE_MOVE_PX = 10;
@@ -42,10 +42,6 @@ const CLIMATE_DEFAULTS = {
   min_span: 4,
   scale: "own",
   decimals: 1,
-  rows: [
-    { name: "Inside", temperature: "sensor.temperature_living_room_temperature", humidity: "sensor.temperature_living_room_humidity" },
-    { name: "Outside", temperature: "sensor.outdoor_temperature", humidity: "sensor.outdoor_humidity" },
-  ],
 };
 
 const CLIMATE_ROW_KEYS = ["name", "temperature", "humidity", "color"];
@@ -53,6 +49,33 @@ const CLIMATE_BAD = ["unknown", "unavailable", "none", ""];
 const climateNum = (v) => (v === undefined || v === null || v === "" || isNaN(Number(v)) ? null : Number(v));
 const climateId = (v) => typeof v === "string" && /^[a-z0-9_]+\.[a-z0-9_]+$/.test(v);
 const climateState = (s) => (!s || CLIMATE_BAD.includes(String(s.state).trim().toLowerCase()) ? null : climateNum(s.state));
+
+/*
+ * Rows for a new card, from the sensors this Home Assistant has: an inside and
+ * an outside temperature sensor (by name) or else the first two, each with a humidity sensor
+ * of the same device when there is one. No temperature sensor: one row to fill in.
+ */
+const climateStubRows = (hass) => {
+  const states = (hass && hass.states) || {};
+  const ents = (hass && hass.entities) || {};
+  const of = (cls) => Object.keys(states).filter((id) => id.startsWith("sensor.")
+    && (states[id].attributes || {}).device_class === cls && climateState(states[id]) !== null).sort();
+  const outdoor = (id) => /outdoor|outside|buiten/i.test(`${id} ${(states[id].attributes || {}).friendly_name || ""}`);
+  const all = of("temperature");
+  const inside = all.filter((id) => !outdoor(id));
+  const outside = all.filter(outdoor);
+  const temps = [inside[0], outside[0]].filter(Boolean);
+  for (const id of all) if (temps.length < 2 && !temps.includes(id)) temps.push(id);
+  if (!temps.length) return [{ temperature: "sensor.temperature" }];
+  const hums = of("humidity");
+  const device = (id) => (ents[id] || {}).device_id || null;
+  return temps.map((t) => {
+    const row = { temperature: t };
+    const h = device(t) && hums.find((x) => device(x) === device(t));
+    if (h) row.humidity = h;
+    return row;
+  });
+};
 
 const CLIMATE_STYLE = `
   :host { --cc-divider: var(--divider-color, rgba(127, 127, 127, .2)); }
@@ -130,8 +153,8 @@ class ClimateCard extends HTMLElement {
     return document.createElement("climate-card-editor");
   }
 
-  static getStubConfig() {
-    return {};
+  static getStubConfig(hass) {
+    return { rows: climateStubRows(hass) };
   }
 
   setConfig(config) {
@@ -139,9 +162,10 @@ class ClimateCard extends HTMLElement {
     const known = ["type", "rows", "hours", "min_span", "scale", "decimals", "tap_action", "hold_action",
       "grid_options", "layout_options", "view_layout", "visibility", "card_mod"];
     for (const k of Object.keys(c)) {
-      if (!known.includes(k)) throw new Error(`Unknown option '${k}'. Known: ${known.slice(1, 8).join(", ")}`);
+      if (!known.includes(k)) throw new Error(`Unknown option '${k}'. Known: ${known.slice(1).join(", ")}`);
     }
-    const rows = c.rows == null ? CLIMATE_DEFAULTS.rows : c.rows;
+    const rows = c.rows;
+    if (rows == null) throw new Error(`rows is required: 1 to ${CLIMATE_MAX_ROWS} rows, each with a temperature sensor`);
     if (!Array.isArray(rows) || !rows.length || rows.length > CLIMATE_MAX_ROWS) {
       throw new Error(`rows must be a list of 1 to ${CLIMATE_MAX_ROWS} rows, each with a temperature sensor`);
     }
@@ -562,9 +586,9 @@ class ClimateCard extends HTMLElement {
 /*
  * Built on HA's own <ha-form>. Three row slots; a slot without a temperature
  * sensor is no row (the rows after it move up). Every field shows the value
- * in use, defaults included; only values that differ from the defaults are
- * written to the YAML. No row left: back to the default rows. Options the
- * editor does not show (grid_options, ...) are kept.
+ * in use, defaults included; the rows and the values that differ from the
+ * defaults are written to the YAML. No row left: no rows in the YAML, so the
+ * card asks for one. Options the editor does not show (grid_options, ...) are kept.
  */
 
 const CLIMATE_ROW_SCHEMA = [
@@ -652,7 +676,7 @@ const climateRowOut = (d, i) => {
 class ClimateCardEditor extends HTMLElement {
   /* config -> form data: defaults filled in, three slots. */
   static toData(config) {
-    const rows = Array.isArray(config.rows) && config.rows.length ? config.rows : CLIMATE_DEFAULTS.rows;
+    const rows = Array.isArray(config.rows) ? config.rows : [];
     const data = {};
     for (let i = 0; i < CLIMATE_MAX_ROWS; i++) {
       const r = rows[i] || {};
@@ -678,7 +702,7 @@ class ClimateCardEditor extends HTMLElement {
     };
   }
 
-  /* form data -> config: only what differs from the defaults. */
+  /* form data -> config: the rows, and only what differs from the defaults. */
   static toConfig(data, previous) {
     const config = { type: "custom:climate-card" };
     const handled = ["type", "rows", "hours", "min_span", "scale", "decimals", "tap_action", "hold_action"];
@@ -690,8 +714,7 @@ class ClimateCardEditor extends HTMLElement {
       const d = data[`row${i + 1}`];
       if (d && climateId(d.temperature)) rows.push(climateRowOut(d, rows.length));
     }
-    const defaults = CLIMATE_DEFAULTS.rows.map((r, i) => climateRowOut(r, i));
-    if (rows.length && JSON.stringify(rows) !== JSON.stringify(defaults)) config.rows = rows;
+    if (rows.length) config.rows = rows;
     const hours = climateNum(data.hours);
     if (hours != null && hours > 0 && hours <= 168 && hours !== CLIMATE_DEFAULTS.hours) config.hours = hours;
     const span = climateNum(data.min_span);

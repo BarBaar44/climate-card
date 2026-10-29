@@ -1,11 +1,16 @@
-# Minimal: the default rows (inside and outside).
+# Minimal: an inside and an outside row (rows is required).
 type: custom:climate-card
+rows:
+  - name: Inside
+    temperature: sensor.temperature_living_room_temperature
+  - name: Outside
+    temperature: sensor.outdoor_temperature
 grid_options:
   columns: 12
   rows: 2
 
 ---
-# Everything, with the defaults written out.
+# Everything, with the option defaults written out.
 type: custom:climate-card
 rows:
   - name: Inside
